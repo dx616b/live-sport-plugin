@@ -931,7 +931,7 @@ async function verifyStreams(streams, cacheKey, m3u8Parser, resolveCache, opts =
           return s;
         }
         console.log(`[Filter] Dropped dead stream (${res.status}): ${targetUrl}`);
-        if (cacheKey) resolveCache.noteFailure(cacheKey);
+        if (cacheKey) resolveCache.noteFailure(cacheKey, { status: res.status });
         return null;
       }
 
