@@ -274,9 +274,62 @@ function isReservedHostname(hostname) {
 
 // ─── Default resolver ────────────────────────────────────────────────────────
 
+/**
+ * Stale-if-error DNS fallback.
+ *
+ * Every guarded request resolves its hostname through dns.promises.lookup(),
+ * which runs on libuv's shared threadpool (4 threads unless UV_THREADPOOL_SIZE
+ * says otherwise). At this process's outbound concurrency the pool saturates
+ * and getaddrinfo starts failing with EAI_AGAIN, which the gate reports as
+ * `dns_resolution_failed` - so a healthy host (measured: watchfooty.com, which
+ * resolves fine from the same container) trips its provider circuit breaker.
+ *
+ * Lookups that succeed are never served from cache: the answer is always fresh,
+ * so rebinding-sensitive callers see what DNS says now. Only a TRANSIENT failure
+ * falls back to the last answer seen for that hostname, bounded in age. Those
+ * addresses still pass through the address classification in checkOutboundUrl().
+ */
+const DNS_LAST_GOOD_MAX_AGE_MS = 10 * 60 * 1000;
+const DNS_LAST_GOOD_MAX_ENTRIES = 512;
+const DNS_RETRY_DELAY_MS = 150;
+const DNS_TRANSIENT_CODES = new Set(['EAI_AGAIN', 'ETIMEOUT', 'ESERVFAIL']);
+const dnsLastGood = new Map(); // hostname -> { addresses, seenAt }
+
+function rememberDnsAnswer(hostname, addresses) {
+  if (!addresses.length) return;
+  if (dnsLastGood.size >= DNS_LAST_GOOD_MAX_ENTRIES && !dnsLastGood.has(hostname)) {
+    // Map preserves insertion order: drop the oldest entry.
+    const oldest = dnsLastGood.keys().next();
+    if (!oldest.done) dnsLastGood.delete(oldest.value);
+  }
+  dnsLastGood.set(hostname, { addresses: addresses.slice(), seenAt: Date.now() });
+}
+
+function lastGoodDnsAnswer(hostname) {
+  const entry = dnsLastGood.get(hostname);
+  if (!entry || Date.now() - entry.seenAt > DNS_LAST_GOOD_MAX_AGE_MS) return null;
+  return entry.addresses.slice();
+}
+
 async function defaultResolve(hostname) {
-  const records = await dns.promises.lookup(hostname, { all: true, verbatim: true });
-  return records.map(record => record.address);
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const records = await dns.promises.lookup(hostname, { all: true, verbatim: true });
+      const addresses = records.map(record => record.address);
+      rememberDnsAnswer(hostname, addresses);
+      return addresses;
+    } catch (err) {
+      lastError = err;
+      if (!DNS_TRANSIENT_CODES.has(String(err && err.code))) break;
+      if (attempt === 0) await new Promise(resolve => setTimeout(resolve, DNS_RETRY_DELAY_MS));
+    }
+  }
+  if (lastError && DNS_TRANSIENT_CODES.has(String(lastError.code))) {
+    const stale = lastGoodDnsAnswer(hostname);
+    if (stale) return stale;
+  }
+  throw lastError;
 }
 
 // ─── The gate ────────────────────────────────────────────────────────────────
@@ -381,4 +434,6 @@ module.exports = {
   getAllowedHosts,
   matchesAllowedHost,
   isReservedHostname,
+  // Test hook: the stale-if-error table is process-wide.
+  clearDnsCache: () => dnsLastGood.clear(),
 };

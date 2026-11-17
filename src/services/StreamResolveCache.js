@@ -16,6 +16,13 @@ const DEFAULT_TTL_MS = 60 * 1000;
 const MIN_TTL_MS = 60 * 1000;
 const MAX_TTL_MS = 10 * 60 * 1000;
 const NEGATIVE_TTL_MS = 30 * 1000;
+// A hard refusal (403/404) from the source is not a transient flake, and
+// prewarm runs every ~60 s: without its own backoff the same dead channel is
+// re-minted and re-probed on every cycle, forever (measured: identical
+// damitv.st/c/... URLs 403ing every minute). Escalate per key instead.
+const DEAD_BASE_MS = 2 * 60 * 1000;
+const DEAD_MAX_MS = 15 * 60 * 1000;
+const DEAD_MAX_STRIKES = 4;
 const MAX_ENTRIES = 200;
 const CHANNEL_MATCH_ID = '__channel__'; // evergreen 24/7 keys survive pruneEnded
 const sharedRevision = value => typeof value === 'string' && /^[a-f0-9-]{36}$/i.test(value) ? value : null;
@@ -147,7 +154,8 @@ class StreamResolveCache {
     this.inFlight = new Map();  // key -> Promise (mint in progress)
     this.pendingOperations = new Map(); // key -> locally prunable operation
     this.ttl = new Map();       // sourceName -> learned TTL ms
-    this.statsCounters = { hits: 0, misses: 0, negativeHits: 0, deferredHits: 0, deferrals: 0, evictions: 0 };
+    this.deadUntil = new Map(); // key -> { until, strikes } hard-refusal backoff
+    this.statsCounters = { hits: 0, misses: 0, negativeHits: 0, deferredHits: 0, deferrals: 0, evictions: 0, deadSkips: 0 };
   }
 
   _extractTokenRemainingMs(url) {
@@ -376,6 +384,13 @@ class StreamResolveCache {
       this._linkTiming(timingStream, this.pendingOperations.get(key)?.timingWork);
       await pending.catch(() => {});
       return this.get(key) || [];
+    }
+
+    // Hard-refused key still inside its backoff window: return nothing without
+    // minting or probing. This is what stops the per-minute prewarm churn.
+    if (this.isDead(key)) {
+      this.statsCounters.deadSkips++;
+      return [];
     }
 
     this.statsCounters.misses++;
@@ -634,6 +649,7 @@ class StreamResolveCache {
 
   _set(key, sourceName, matchId, streams, status, ttlMs) {
     const now = Date.now();
+    if (status === 'ok') this.deadUntil.delete(key);
     this.entries.delete(key);
     const entry = {
       streams: streams.map(cloneStream), // store our own copy
@@ -652,6 +668,7 @@ class StreamResolveCache {
   /** Pre-flight passed: double the source TTL (capped) and extend the entry. */
   noteSuccess(key) {
     if (!key) return;
+    this.clearDead(key);
     const sourceName = key.split(':')[0];
     const maxTtl = sourceName === 'daddylive' ? 150 * 1000 : (sourceName === 'leaf' ? 4 * 3600 * 1000 : this.maxTtlMs);
     const next = Math.min(this._ttlFor(sourceName) * 2, maxTtl);
@@ -662,8 +679,14 @@ class StreamResolveCache {
     }
   }
 
-  /** Pre-flight failed: halve the source TTL (floored) and evict the entry. */
-  noteFailure(key) {
+  /**
+   * Pre-flight failed: halve the source TTL (floored) and evict the entry.
+   *
+   * `info.status` is the upstream HTTP status when one was observed. A 403/404
+   * is a refusal rather than a flake, so it additionally arms an escalating
+   * backoff (`isDead`). Callers that pass no info keep the old behaviour.
+   */
+  noteFailure(key, info = {}) {
     if (!key) return;
     const sourceName = key.split(':')[0];
     const next = Math.max(Math.floor(this._ttlFor(sourceName) / 2), this.minTtlMs);
@@ -674,6 +697,35 @@ class StreamResolveCache {
     if (publicationEntry) publicationEntry.invalidated = true;
     this.entries.delete(key);
     this._invalidateShared(key, entry?.sharedRevision || publicationEntry?.sharedRevision).catch(() => {});
+
+    const status = Number(info && info.status);
+    if (status === 403 || status === 404 || (info && info.hard === true)) {
+      const prev = this.deadUntil.get(key);
+      const strikes = Math.min((prev ? prev.strikes : 0) + 1, DEAD_MAX_STRIKES);
+      const backoff = Math.min(DEAD_BASE_MS * Math.pow(2, strikes - 1), DEAD_MAX_MS);
+      if (this.deadUntil.size >= this.maxEntries) {
+        const oldest = this.deadUntil.keys().next();
+        if (!oldest.done) this.deadUntil.delete(oldest.value);
+      }
+      this.deadUntil.set(key, { until: Date.now() + backoff, strikes });
+    }
+  }
+
+  /** True while `key` is inside a hard-refusal backoff window. */
+  isDead(key) {
+    if (!key) return false;
+    const entry = this.deadUntil.get(key);
+    if (!entry) return false;
+    if (Date.now() >= entry.until) {
+      this.deadUntil.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  /** Clear the hard-refusal backoff (a probe succeeded). */
+  clearDead(key) {
+    if (key) this.deadUntil.delete(key);
   }
 
   async _invalidateShared(key, revision) {
