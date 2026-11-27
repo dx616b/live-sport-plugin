@@ -37,6 +37,10 @@ function hardResolutionFailure(error) {
     for (let item = error; item && typeof item === 'object'; item = item.cause) {
       if (seen.has(item) || seen.size >= 8) return true;
       seen.add(item);
+      // An unresolvable embed was still refused by the outbound guard, but
+      // it must not prevent trying an independent iframe/folder. Keep every
+      // actual policy refusal (private IP, disallowed host, bad URL) fatal.
+      if (item.code === 'ERR_OUTBOUND_BLOCKED' && item.reason === 'dns_resolution_failed') continue;
       if (item.code === 'ERR_OUTBOUND_BLOCKED' || item.isFatal === true) return true;
     }
     return false;
