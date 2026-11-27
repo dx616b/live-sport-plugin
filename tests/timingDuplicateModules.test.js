@@ -41,7 +41,11 @@ test('separate runtime module copies share stream-to-cache relations', () => {
   const previousFlag = process.env.STREAM_TIMING_EXPERIMENT;
   const originalPath = require.resolve('../src/services/TimingRuntime');
   const priorModule = require.cache[originalPath];
-  const once = jest.spyOn(process, 'once').mockImplementation(() => process);
+  const exitHooks = [];
+  const once = jest.spyOn(process, 'once').mockImplementation((event, callback) => {
+    if (event === 'exit') exitHooks.push(callback);
+    return process;
+  });
   delete globalThis[key]; delete require.cache[originalPath];
   process.env.STREAM_TIMING_EXPERIMENT = 'true';
   const copy = copiedModule('TimingRuntime');
@@ -50,6 +54,9 @@ test('separate runtime module copies share stream-to-cache relations', () => {
     expect(original.relations).toBe(copy.module.relations);
     expect(once).toHaveBeenCalledTimes(1);
   } finally {
+    // Execute captured teardown hooks before deleting the module or globals.
+    // Copied modules may use Node's real timers rather than Jest's timer realm.
+    for (const stop of exitHooks) stop();
     copy.cleanup(); once.mockRestore(); delete require.cache[originalPath];
     if (priorModule) require.cache[originalPath] = priorModule;
     if (previous === undefined) delete globalThis[key]; else globalThis[key] = previous;
@@ -60,7 +67,11 @@ test('separate runtime module copies share stream-to-cache relations', () => {
 
 test('separate output module copies use the same writer and session', () => {
   const key = Symbol.for('nuvio.guardedTiming.output.v1'), previous = globalThis[key];
-  const once = jest.spyOn(process, 'once').mockImplementation(() => process);
+  const exitHooks = [];
+  const once = jest.spyOn(process, 'once').mockImplementation((event, callback) => {
+    if (event === 'exit') exitHooks.push(callback);
+    return process;
+  });
   delete globalThis[key];
   const copy = copiedModule('TimingOutput');
   try {
@@ -68,6 +79,9 @@ test('separate output module copies use the same writer and session', () => {
     expect(original.sharedTimingOutput()).toBe(copy.module.sharedTimingOutput());
     expect(once).toHaveBeenCalledTimes(1);
   } finally {
+    // Execute captured teardown hooks before deleting the module or globals.
+    // Copied modules may use Node's real timers rather than Jest's timer realm.
+    for (const stop of exitHooks) stop();
     copy.cleanup(); once.mockRestore();
     if (previous === undefined) delete globalThis[key]; else globalThis[key] = previous;
   }
