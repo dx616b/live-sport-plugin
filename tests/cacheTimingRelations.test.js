@@ -61,7 +61,7 @@ test('a reentrant diagnostic sink cannot start a second mint for the same key', 
 test('shared local mint correlates both stream links with its HTTP timing and does not leak context', async () => {
   const links = [], httpRows = [];
   const relations = createTimingRelations({ emit: row => links.push(row) });
-  const timing = createNativeTiming({ enabled: true, emit: row => httpRows.push(row) });
+  const timing = createNativeTiming({ enabled: true, emit: row => httpRows.push(row), emitSummary: () => {} });
   const cache = new StreamResolveCache({ timingRelations: relations });
   const first = relations.stream(), second = relations.stream();
   let finish;
