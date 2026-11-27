@@ -42,9 +42,9 @@
     "curl-impersonate": "^0.0.0",
     "dotenv": "^17.4.2",
     "express": "^4.18.2",
-    "fast-xml-parser": "^4.5.7",
+    "fast-xml-parser": "^5.11.3",
     "got-scraping": "^4.2.1",
-    "happy-dom": "^20.11.1",
+    "happy-dom": "^21.0.4",
     "http-proxy-middleware": "^4.2.0",
     "impit": "^0.14.3",
     "js-yaml": "^5.2.2",
@@ -88,7 +88,14 @@
   },
   "overrides": {
     "glob": "^11.0.0",
-    "inflight": "^1.0.6"
+    "inflight": "^1.0.6",
+    "qs": "^6.17.1",
+    "router": {
+      "path-to-regexp": "^0.1.13"
+    },
+    "external-editor": {
+      "tmp": "^0.2.6"
+    }
   },
   "devDependencies": {
     "jest": "^29.7.0"

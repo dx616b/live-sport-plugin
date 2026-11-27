@@ -119,6 +119,10 @@ class StreamedWasmPool {
       });
 
       this.workers.push(workerObj);
+      // Idle pool threads must not keep an otherwise stopped application (or
+      // test process) alive. Every queued/active job has a referenced deadline
+      // timer, so pending work still keeps the process alive until it settles.
+      worker.unref?.();
     } catch (err) {
       console.error(`[StreamedWasmPool] Failed to spawn worker #${index}:`, err.message);
     }

@@ -84,7 +84,8 @@ test('manifest fetch opt-in metadata carries final URL and body',async()=>{
 });
 test('redirected media segment uses final directory and query',async()=>{
   const r=await get(route(upstream+'/redirect-media?old=1'));expect(r.status).toBe(200);
-  const segment=r.body.split('\n').find(x=>x.startsWith(upstream));expect(segment).toBe(upstream+'/final/segment.ts?fresh=2');
+  const segment=r.body.split('\n').find(x=>x.includes('/api/hlschunk?'));
+  expect(new URL(segment).searchParams.get('url')).toBe(upstream+'/final/segment.ts?fresh=2');
 });
 test('redirected master resolves child at final directory',async()=>{
   const r=await get(route(upstream+'/redirect-master'));expect(new URL(child(r),addon).searchParams.get('url')).toBe(upstream+'/final/child.m3u8?fresh=2');
@@ -96,7 +97,9 @@ test('redirected KEY and MAP resolve at final directory',async()=>{
   const r=await get(route(upstream+'/redirect-media'));expect(r.body).toContain('URI="'+upstream+'/final/keys/key.bin"');expect(r.body).toContain('URI="'+upstream+'/final/init.mp4"');
 });
 test('redirected cross-origin segment uses mirror directory and token',async()=>{
-  const r=await get(route(upstream+'/cross'));expect(r.body).toContain(mirror+'/mirror/segment.ts?fresh=2');
+  const r=await get(route(upstream+'/cross'));
+  const segment=r.body.split('\n').find(x=>x.includes('/api/hlschunk?'));
+  expect(new URL(segment).searchParams.get('url')).toBe(mirror+'/mirror/segment.ts?fresh=2');
 });
 test('503 retry preserves final response metadata',async()=>{
   const r=await proxy.fetchUpstreamManifest(upstream+'/flaky','','',{withResponseUrl:true});expect(r).toEqual({body:media,url:upstream+'/final/media.m3u8?fresh=2'});expect(seen.filter(x=>x==='/flaky')).toHaveLength(2);

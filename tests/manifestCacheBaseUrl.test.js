@@ -55,9 +55,12 @@ describe('/api/manifest cache identity includes the rewritten request base URL',
   });
 
   test('legacy HLS ua parameter keeps the existing default user agent', async () => {
+    await requestWithHost('default.example');
+    const defaultUserAgent = safeFetch.mock.calls[0][1].headers['User-Agent'];
     const result = await requestWithHost('same.example', undefined, { ua: 'LegacyClient/131.0' });
     expect(result.status).toBe(200);
-    expect(safeFetch.mock.calls[0][1].headers['User-Agent']).toContain('Chrome/127.0.0.0');
+    expect(safeFetch.mock.calls[1][1].headers['User-Agent']).toBe(defaultUserAgent);
+    expect(defaultUserAgent).not.toContain('LegacyClient');
     expect(result.body).not.toContain('hlsua=');
   });
 

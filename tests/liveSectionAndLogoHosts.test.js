@@ -1,5 +1,12 @@
 'use strict';
 
+// Catalog/artwork fixtures must not launch live provider requests that outlive
+// the test environment. Transport behavior has its own integration suites.
+jest.mock('../src/services/ProviderOutbound', () => ({
+  safeFetch: jest.fn(async () => { throw new Error('Unexpected outbound request in catalog fixture'); }),
+  streamingFetch: jest.fn(async () => { throw new Error('Unexpected outbound request in catalog fixture'); })
+}));
+
 const fs = require('fs');
 
 /**

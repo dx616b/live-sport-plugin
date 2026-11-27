@@ -165,11 +165,13 @@ describe('College Sports Categorization and Empty Stream Guards', () => {
     });
 
     test('reconciles Mens College Basketball with unqualified basketball into college category only', async () => {
+      // Keep the fixture live regardless of the calendar date of the test run.
+      const kickoff = String(Date.now());
       const m1 = {
         id: 'dlv_event_cal_poly',
         title: 'Cal Poly vs Arizona',
         category: 'college',
-        date: '1793935800000',
+        date: kickoff,
         league: "Men's College Basketball",
         team1: { name: 'Cal Poly' },
         team2: { name: 'Arizona' },
@@ -179,7 +181,7 @@ describe('College Sports Categorization and Empty Stream Guards', () => {
         id: 'ppv_cal_poly',
         title: 'Cal Poly Mustangs at Arizona Wildcats',
         category: 'basketball',
-        date: '1793935800000',
+        date: kickoff,
         league: 'Basketball',
         team1: { name: 'Cal Poly Mustangs' },
         team2: { name: 'Arizona Wildcats' },

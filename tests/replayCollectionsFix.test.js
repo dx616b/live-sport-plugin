@@ -1,5 +1,10 @@
 'use strict';
 
+jest.mock('../src/services/ProviderOutbound', () => ({
+  safeFetch: jest.fn(async () => { throw new Error('Unexpected outbound request in replay fixture'); }),
+  streamingFetch: jest.fn(async () => { throw new Error('Unexpected outbound request in replay fixture'); })
+}));
+
 const { manifest } = require('../src/manifest');
 const { isReplayMatch, handleReplayCatalog } = require('../src/catalog');
 const MatchEntity = require('../src/domain/MatchEntity');

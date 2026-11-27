@@ -14,6 +14,7 @@ class FakeWorker extends EventEmitter {
     super();
     this.messages = [];
     this.terminated = false;
+    this.unref = jest.fn();
     setImmediate(() => this.emit('message', { type: 'ready' }));
   }
 
@@ -56,6 +57,10 @@ describe('StreamedWasmPool timeout lifecycle', () => {
 
   afterEach(async () => {
     await pool.destroy();
+  });
+
+  test('idle workers do not hold the application open', () => {
+    expect(workers[0].unref).toHaveBeenCalledTimes(1);
   });
 
   test('removes a queued job when it times out before dispatch', async () => {
