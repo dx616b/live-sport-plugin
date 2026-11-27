@@ -3,6 +3,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+// These tests intentionally replace exit hooks and module globals. Own the
+// snapshot intervals too, so no deleted module can report after Jest teardown.
+beforeEach(() => jest.useFakeTimers());
+afterEach(() => {
+  jest.clearAllTimers();
+  jest.useRealTimers();
+});
+
 function copiedModule(name) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'timing-module-'));
   const file = path.join(dir, `${name}.js`);
