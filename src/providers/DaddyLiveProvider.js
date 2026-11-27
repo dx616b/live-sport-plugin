@@ -37,6 +37,10 @@ function hardResolutionFailure(error) {
     for (let item = error; item && typeof item === 'object'; item = item.cause) {
       if (seen.has(item) || seen.size >= 8) return true;
       seen.add(item);
+      // An unresolvable embed was still refused by the outbound guard, but
+      // it must not prevent trying an independent iframe/folder. Keep every
+      // actual policy refusal (private IP, disallowed host, bad URL) fatal.
+      if (item.code === 'ERR_OUTBOUND_BLOCKED' && item.reason === 'dns_resolution_failed') continue;
       if (item.code === 'ERR_OUTBOUND_BLOCKED' || item.isFatal === true) return true;
     }
     return false;
@@ -204,6 +208,65 @@ function isDeadEmbedHost(urlOrHost) {
     try { host = new URL(urlOrHost).hostname; } catch (_) { return false; }
   }
   return DEAD_EMBED_HOSTS.has(String(host).toLowerCase());
+}
+
+const PHP_TOKEN_QUOTE_DELIMS = /["']/;
+const PHP_TOKEN_ANY_DELIMS = /["'\s]/;
+// No real endpoint token is longer than this; the cap is what makes the scan
+// immune to multi-MB inline payloads.
+const PHP_TOKEN_MAX_LEN = 4096;
+
+/**
+ * Return the delimiter-bounded token around `needle` that starts at `at`.
+ *
+ * WHY THIS EXISTS: the JSON player hop used to be located with
+ *   /([^"']*player\.php)/i
+ *   /([^"'\s]*player\.php\?[^"'\s]*[?&]id=\d+[^"'\s]*)/i
+ * Both begin with an unbounded negated class, so when the page has no early
+ * match the engine retries the scan at EVERY character position: O(n^2).
+ * Packed embed pages routinely inline a quote-free numeric array hundreds of
+ * KB long, which turned a single resolution into minutes of pinned CPU
+ * (measured on production: one core saturated for hours, node-cron ticks
+ * missed, HTTP stalled). This scans linearly and never walks more than
+ * `maxLen` characters around the needle.
+ */
+function tokenAround(html, at, needleLen, delims, maxLen = PHP_TOKEN_MAX_LEN) {
+  let start = at;
+  let end = at + needleLen;
+  while (start > 0 && at - start < maxLen && !delims.test(html[start - 1])) start--;
+  while (end < html.length && end - at < maxLen && !delims.test(html[end])) end++;
+  return html.slice(start, end);
+}
+
+/** First `player.php` reference in the page, bounded by quotes. May be a template. */
+function findPlayerPhpRef(html) {
+  const at = html.indexOf('player.php');
+  if (at < 0) return null;
+  const needle = 'player.php';
+  let start = at;
+  while (start > 0 && at - start < PHP_TOKEN_MAX_LEN && !PHP_TOKEN_QUOTE_DELIMS.test(html[start - 1])) start--;
+  // Deliberately stops at `player.php` (no query): callers append `?id=<channelId>`
+  // when the token has no numeric id yet.
+  return html.slice(start, at + needle.length);
+}
+
+/**
+ * First concrete `player.php?...id=N` call in the page, bounded by quotes/space.
+ *
+ * Matches the historical behaviour exactly: the old pattern was
+ *   /([^"'\s]*player\.php\?[^"'\s]*[?&]id=\d+[^"'\s]*)/i
+ * so it required a SECOND `?`/`&` before `id=` (e.g. `player.php?x=1&id=5`)
+ * and never matched the common `player.php?id=91` shape. Preserved on purpose:
+ * that case falls through to endpointRef + channelId, which is known-good.
+ */
+function findPlayerPhpCall(html) {
+  const needle = 'player.php?';
+  for (let at = html.indexOf(needle); at >= 0; at = html.indexOf(needle, at + 1)) {
+    const token = tokenAround(html, at, needle.length, PHP_TOKEN_ANY_DELIMS);
+    const afterQuery = token.slice(token.indexOf(needle) + needle.length);
+    if (/[?&]id=\d+/.test(afterQuery)) return token;
+  }
+  return null;
 }
 
 /**
@@ -506,13 +569,13 @@ class DaddyLiveProvider extends BaseProvider {
     try { idFromQuery = new URL(pageUrl).searchParams.get('id'); } catch (_) {}
     const channelId = (idFromCall && idFromCall[1]) || (idFromAttr && idFromAttr[1]) || idFromQuery || null;
 
-    const endpointRef = html.match(/([^"']*player\.php)/i);
+    const endpointRef = findPlayerPhpRef(html);
     let phpUrl = null;
-    const concrete = html.match(/([^"'\s]*player\.php\?[^"'\s]*[?&]id=\d+[^"'\s]*)/i);
-    if (concrete && concrete[1]) {
-      try { phpUrl = new URL(concrete[1], pageUrl).toString(); } catch (_) { phpUrl = null; }
-    } else if (channelId && endpointRef && endpointRef[1]) {
-      try { phpUrl = new URL(endpointRef[1], pageUrl).toString(); } catch (_) { phpUrl = null; }
+    const concrete = findPlayerPhpCall(html);
+    if (concrete) {
+      try { phpUrl = new URL(concrete, pageUrl).toString(); } catch (_) { phpUrl = null; }
+    } else if (channelId && endpointRef) {
+      try { phpUrl = new URL(endpointRef, pageUrl).toString(); } catch (_) { phpUrl = null; }
     }
 
     if (phpUrl) {
@@ -1251,3 +1314,5 @@ class DaddyLiveProvider extends BaseProvider {
 }
 
 module.exports = DaddyLiveProvider;
+module.exports.findPlayerPhpRef = findPlayerPhpRef;
+module.exports.findPlayerPhpCall = findPlayerPhpCall;

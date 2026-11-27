@@ -1,6 +1,9 @@
 'use strict';
 const { EventEmitter } = require('node:events');
-const { createNativeTiming } = require('../src/services/NativeTiming');
+const { createNativeTiming: createTiming } = require('../src/services/NativeTiming');
+// Own both diagnostic sinks. The production summary sink creates a periodic
+// writer; unit fixtures must not leave it running after their environment ends.
+const createNativeTiming = options => createTiming({ emitSummary: () => {}, ...options });
 
 test('terminal owner labels are allowlisted and do not expose caller input', () => {
   const rows = [], timing = createNativeTiming({ enabled: true, emit: row => rows.push(row) });

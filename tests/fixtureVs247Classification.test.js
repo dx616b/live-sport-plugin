@@ -1,7 +1,13 @@
+// Classification/parsing tests do not need the application container or its
+// live WASM worker pool. Keep this suite offline and let Jest exit cleanly.
+jest.mock('../src/container', () => ({ resolve: jest.fn(() => null) }));
+jest.mock('../src/streams', () => ({ prewarmMatch: jest.fn() }));
+
 const { mapMatchToMetaPreview } = require('../src/catalog');
 const LeafProvider = require('../src/providers/LeafProvider');
 
 describe('Fixture vs 24/7 Channel Classification', () => {
+  afterEach(() => jest.restoreAllMocks());
   test('live match with date="0" and matchup teams is NOT branded as 24/7', () => {
     const match = {
       id: 'ak47_utah_mammoth_vs_tampa_bay_lightning',
@@ -93,7 +99,10 @@ describe('Fixture vs 24/7 Channel Classification', () => {
       json: async () => ({ metas })
     });
 
-    const matches = await provider._fetchLiveMatchesInternal();
+    // A configured installation is required before Leaf attempts its fetch.
+    const matches = await provider._fetchLiveMatchesInternal({
+      configured: true, apiBase: 'https://leaf.example.invalid', origin: 'https://leaf.example.invalid'
+    });
     expect(matches.length).toBe(1);
     expect(matches[0].date).not.toBe('0');
     expect(Number(matches[0].date)).toBeGreaterThan(0);

@@ -971,6 +971,13 @@ class MatchAggregator {
       return true;
     }
 
+    // DaddyLive's strong IDs encode league/squad/kickoff identity, not a feed
+    // number. Distinct canonical fixtures must not be collapsed just because
+    // their team titles happen to match; a generic NCAA row can otherwise
+    // acquire a men's/women's or differently qualified fixture's sources.
+    if (/^dlv_event_[a-f0-9]{24}$/.test(p1.id || '') &&
+        /^dlv_event_[a-f0-9]{24}$/.test(p2.id || '') && p1.id !== p2.id) return false;
+
     // 5. Dual-team extraction — if both titles parse as "team1 vs team2", require
     //    BOTH teams to independently fuzzy-match. (Skip for motorsport which has no teams).
     if (p1.teams && p2.teams && !isMoto1 && !isMoto2) {

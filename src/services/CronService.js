@@ -31,6 +31,10 @@ class CronService {
     // single timeout must never blank every Leaf source for a full cadence.
     this._overlayFailStreakMax = Math.max(1, parseInt(process.env.LIVE_OVERLAY_MAX_CONSECUTIVE_FAILURES, 10) || 3);
     this._lastIdentityWarnAt = 0;
+    // Leaf without LEAF_INSTALL_CONFIG is a permanent state, not an outage.
+    // Re-checking every tick only produced "failed 340x" noise and a cleared
+    // overlay each time, so recheck hourly and log the state once.
+    this._overlayUnconfiguredUntil = 0;
   }
 
   /**
@@ -212,6 +216,7 @@ class CronService {
   async refreshLiveOverlay() {
     if (!this._isPrimaryWorker()) return { skipped: 'secondary-worker' };
     if (this._overlayBusy) return { skipped: 'busy' };
+    if (Date.now() < this._overlayUnconfiguredUntil) return { skipped: 'provider-unconfigured' };
     const overlay = this.liveOverlayService;
     const aggregator = this.matchAggregator;
     if (!overlay || !aggregator || typeof aggregator.buildLiveOverlay !== 'function') {
@@ -220,6 +225,12 @@ class CronService {
     this._overlayBusy = true;
     try {
       const result = await aggregator.buildLiveOverlay();
+      if (result && result.reason === 'provider-unconfigured') {
+        this._overlayUnconfiguredUntil = Date.now() + 60 * 60 * 1000;
+        this._overlayFailStreak = 0;
+        console.log('[CronService] Leaf overlay disabled: provider not configured; rechecking in 1h');
+        return { ok: false, skipped: 'provider-unconfigured' };
+      }
       const fetched = result && Number.isFinite(result.fetched) ? result.fetched : 0;
       const matched = result && Number.isFinite(result.matched) ? result.matched : 0;
       let nextMap = result && result.map instanceof Map ? result.map : null;

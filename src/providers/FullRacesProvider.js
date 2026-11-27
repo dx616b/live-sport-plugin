@@ -8,6 +8,10 @@ const StreamEntity = require('../domain/StreamEntity');
 const { safeFetch } = require('../services/ProviderOutbound');
 const { parseTimezone } = require('../timezone');
 
+// Local egress saturation is not an upstream failure, so it must never trip
+// this provider's breaker (same policy as the other providers).
+const localCapacityFilter = error => error?.code === 'ERR_OUTBOUND_CAPACITY';
+
 function b64Decode(str) {
   let b64 = str.replace(/-/g, '+').replace(/_/g, '/');
   const rem = b64.length % 4;
@@ -53,6 +57,19 @@ class FullRacesProvider extends BaseProvider {
     this._dmCache = new Map();
     this._streamCache = new Map();
     this._maxCacheEntries = 500;
+
+    // fullraces.com repeatedly misses the shared outbound deadline (measured:
+    // 4 of 7 categories in 10 minutes) and every catalog sync paid that budget
+    // again with no backoff. wrapSync uses the sync-cadence window, so three
+    // consecutive failures open the breaker and the remaining categories are
+    // skipped instantly until it half-opens.
+    this.fetchListing = this.circuitBreaker
+      ? this.circuitBreaker.wrapSync(
+        `${this.name}_fetchListing`,
+        (url) => this._fetchHtml(url),
+        { errorFilter: localCapacityFilter }
+      )
+      : (url) => this._fetchHtml(url);
   }
 
   /**
@@ -168,7 +185,8 @@ class FullRacesProvider extends BaseProvider {
         else if (url.includes('wsbk')) fallbackLeague = 'MotoGP';
         else if (url.includes('f2')) fallbackLeague = 'Formula 2';
 
-        const html = await this._fetchHtml(url);
+        const html = await this.fetchListing(url);
+        if (!html) continue; // breaker open (fallback resolved to null)
         const parsed = this._parseListingHtml(html, fallbackLeague);
 
         for (const m of parsed) {

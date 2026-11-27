@@ -4,13 +4,13 @@ WORKDIR /app
 
 # Copy package configs and install dependencies
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 # Copy source code and assets
 COPY . .
 
 # Install internal resolver dependencies
-RUN cd resolver && npm install
+RUN cd resolver && npm ci
 
 # Build the bundled distribution
 # Install pinned official ICU timezone data before the candidate build.

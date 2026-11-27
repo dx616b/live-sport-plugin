@@ -5,6 +5,29 @@ const { selectGuardedEgress } = require('./GuardedEgressPolicy');
 const DEFAULT_LIMIT = 1024 * 1024;
 let singleton, nativePool;
 
+// Capacity misses are expected under load: one per queued request. The
+// diagnostic blob is ~1 KB, so logging every miss drowned the log (and filled
+// the container's json-file, which had no rotation configured). One line per
+// minute, carrying the suppressed count, is enough to see the trend.
+const CAPACITY_LOG_INTERVAL_MS = 60 * 1000;
+let capacityLoggedAt = 0;
+let capacitySuppressed = 0;
+
+function logCapacity(failure) {
+  const now = Date.now();
+  if (now - capacityLoggedAt < CAPACITY_LOG_INTERVAL_MS) {
+    capacitySuppressed += 1;
+    return;
+  }
+  const suppressed = capacitySuppressed;
+  capacityLoggedAt = now;
+  capacitySuppressed = 0;
+  console.warn('[GuardedOutbound] Native capacity', JSON.stringify({
+    ...(failure.capacityDiagnostic || { reason: failure.code }),
+    suppressed,
+  }));
+}
+
 function abortableDelay(ms, signal) {
   return new Promise((resolve, reject) => {
     signal.throwIfAborted();
@@ -75,7 +98,7 @@ function createSharedOutboundFetch({ nativeFetch, fallbackFetch, delay = abortab
             /^ERR_NATIVE_(POOL|SLOT)_(BUSY|CAPACITY)$/.test(failure?.code || '') ||
             /capacity|native pool/i.test(String(failure?.message || ''));
           if (isCapacity) {
-            console.warn('[GuardedOutbound] Native capacity', JSON.stringify(failure.capacityDiagnostic || { reason: failure.code }));
+            logCapacity(failure);
             if (proxyUrl) {
               throw Object.assign(failure, { transportCode: failure.code, code: 'ERR_OUTBOUND_CAPACITY', isFatal: true, statusCode: 503 });
             }

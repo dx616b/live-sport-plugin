@@ -2,6 +2,32 @@ const BaseProvider = require('./BaseProvider');
 const MatchEntity = require('../domain/MatchEntity');
 const StreamEntity = require('../domain/StreamEntity');
 
+/**
+ * streamed.pk intermittently serves an HTML challenge/error page with HTTP 200.
+ * `res.json()` then throws `Unexpected token '<'`, which the breaker treats as a
+ * transient flake and re-probes every 90 s. Classify it explicitly: the reason
+ * becomes readable in /health and in the breaker log, and the failure is marked
+ * definitive so callers can stop treating it as a network blip.
+ */
+function providerHtmlError(status) {
+  const err = new Error(`provider returned HTML instead of JSON (HTTP ${status})`);
+  err.code = 'ERR_PROVIDER_HTML_RESPONSE';
+  err.isDefinitive = true;
+  return err;
+}
+
+async function readJsonOrThrow(res) {
+  const type = res && res.headers && typeof res.headers.get === 'function'
+    ? String(res.headers.get('content-type') || '').toLowerCase()
+    : '';
+  const text = await res.text();
+  const head = String(text || '').trimStart().slice(0, 32).toLowerCase();
+  if (type.includes('text/html') || head.startsWith('<!doctype') || head.startsWith('<html')) {
+    throw providerHtmlError(res && res.status);
+  }
+  return JSON.parse(text);
+}
+
 class StreamedPkProvider extends BaseProvider {
   constructor(opts = {}) {
     super(opts);
@@ -19,7 +45,7 @@ class StreamedPkProvider extends BaseProvider {
         signal: AbortSignal.timeout(15000)
       });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-      return await res.json();
+      return await readJsonOrThrow(res);
     });
 
     this.fetchLiveMatches = this.circuitBreaker.wrapSync(`${this.name}_fetchLiveMatches`, async () => {
@@ -31,7 +57,7 @@ class StreamedPkProvider extends BaseProvider {
         signal: AbortSignal.timeout(10000)
       });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-      return await res.json();
+      return await readJsonOrThrow(res);
     });
 
     this.fetchStreams = this.circuitBreaker.wrap(`${this.name}_fetchStreams`, async (source, id) => {
@@ -44,7 +70,7 @@ class StreamedPkProvider extends BaseProvider {
         signal: AbortSignal.timeout(10000)
       });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-      return await res.json();
+      return await readJsonOrThrow(res);
     });
   }
 
